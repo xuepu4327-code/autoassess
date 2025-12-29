@@ -16,7 +16,6 @@
             <p class="subtitle">Automated Programming Logic Assignment Evaluation System</p>
         </header>
 
-        <!-- Main Content -->
         <div class="main-content">
             <!-- Left Panel: Upload & Settings -->
             <div class="left-panel">
@@ -28,160 +27,195 @@
                         <input type="file" id="fileInput" accept=".txt,.pdf,.docx,.py,.java,.cpp">
                         <p class="file-info">Supported: TXT, PDF, DOCX, Source Code Files</p>
                     </div>
+                    <!-- 本地上传评分 -->
                     <button class="btn-primary" onclick="processFile()" id="processBtn">
                         <i class="fas fa-play"></i> Start Grading
+                    </button>
+                    <!-- 真正连 Google Drive 的按钮 -->
+                    <button class="btn-secondary" onclick="scanDriveFolder()" id="cloudScanBtn">
+                        <i class="fas fa-cloud"></i> Scan Google Drive Folder
                     </button>
                 </div>
 
                 <div class="card">
-                    <h2><i class="fas fa-clipboard-list"></i> Grading Rubric</h2>
-                    <div class="rubric-item">
-                        <label>Logic Correctness (40 pts)</label>
-                        <input type="range" id="logicWeight" min="0" max="50" value="40">
-                        <span id="logicValue">40</span>
-                    </div>
-                    <div class="rubric-item">
-                        <label>Flowchart Completeness (30 pts)</label>
-                        <input type="range" id="flowchartWeight" min="0" max="50" value="30">
-                        <span id="flowchartValue">30</span>
-                    </div>
-                    <div class="rubric-item">
-                        <label>Pseudocode Structure (20 pts)</label>
-                        <input type="range" id="pseudocodeWeight" min="0" max="50" value="20">
-                        <span id="pseudocodeValue">20</span>
-                    </div>
-                    <div class="rubric-item">
-                        <label>Document Format (10 pts)</label>
-                        <input type="range" id="formattingWeight" min="0" max="50" value="10">
-                        <span id="formattingValue">10</span>
+                    <h2><i class="fas fa-sliders-h"></i> Rubric Settings</h2>
+                    <div class="rubric-settings">
+                        <div class="rubric-item">
+                            <div class="rubric-label">
+                                <span>Logic</span>
+                                <span class="rubric-weight" id="logicWeightLabel">40%</span>
+                            </div>
+                            <input type="range" id="logicWeight" min="0" max="40" value="40">
+                        </div>
+                        <div class="rubric-item">
+                            <div class="rubric-label">
+                                <span>Flowchart</span>
+                                <span class="rubric-weight" id="flowchartWeightLabel">30%</span>
+                            </div>
+                            <input type="range" id="flowchartWeight" min="0" max="30" value="30">
+                        </div>
+                        <div class="rubric-item">
+                            <div class="rubric-label">
+                                <span>Pseudocode</span>
+                                <span class="rubric-weight" id="pseudocodeWeightLabel">20%</span>
+                            </div>
+                            <input type="range" id="pseudocodeWeight" min="0" max="20" value="20">
+                        </div>
+                        <div class="rubric-item">
+                            <div class="rubric-label">
+                                <span>Formatting</span>
+                                <span class="rubric-weight" id="formattingWeightLabel">10%</span>
+                            </div>
+                            <input type="range" id="formattingWeight" min="0" max="10" value="10">
+                        </div>
                     </div>
                     <button class="btn-secondary" onclick="updateRubric()">
                         <i class="fas fa-sync-alt"></i> Update Rubric
                     </button>
+                    <p class="rubric-note">Note: Total weight should add up to 100%. System will normalize if needed.</p>
                 </div>
 
                 <div class="card">
-                    <h2><i class="fas fa-cog"></i> System Settings</h2>
-                    <div class="setting-item">
-                        <label>AI Model:</label>
-                        <select id="aiModel">
-                            <option value="gemini-pro">Gemini Pro</option>
-                            <option value="gemini-pro-vision">Gemini Pro Vision</option>
-                        </select>
-                    </div>
-                    <div class="setting-item">
-                        <label>Language:</label>
-                        <select id="language">
-                            <option value="en">English</option>
-                            <option value="zh-TW">繁體中文</option>
-                        </select>
-                    </div>
-                    <div class="setting-item">
-                        <label><input type="checkbox" id="saveHistory" checked> Save Grading History</label>
-                    </div>
-                    <div class="setting-item">
-                        <label><input type="checkbox" id="autoDownload"> Auto-download Report</label>
+                    <h2><i class="fas fa-cogs"></i> Grading Options</h2>
+                    <div class="options-grid">
+                        <label class="option-item">
+                            <input type="checkbox" id="saveHistory" checked>
+                            <span>Save result to history</span>
+                        </label>
+                        <label class="option-item">
+                            <input type="checkbox" id="autoDownload">
+                            <span>Auto-generate PDF report</span>
+                        </label>
+                        <label class="option-item">
+                            <select id="aiModel">
+                                <option value="gemini-pro">Gemini Pro (Default)</option>
+                                <option value="mock">Demo Mode (No API Key)</option>
+                            </select>
+                            <span>AI Model</span>
+                        </label>
+                        <label class="option-item">
+                            <select id="language">
+                                <option value="en">English</option>
+                                <option value="zh">Chinese</option>
+                            </select>
+                            <span>Report Language</span>
+                        </label>
                     </div>
                 </div>
             </div>
 
-            <!-- Right Panel: Results Display -->
+            <!-- Right Panel: Results & History -->
             <div class="right-panel">
-                <div class="card result-card" id="resultCard" style="display: none;">
-                    <h2><i class="fas fa-chart-bar"></i> Grading Results</h2>
-                    
-                    <div class="student-info">
+                <!-- Student & File Info -->
+                <div class="card">
+                    <h2><i class="fas fa-user-graduate"></i> Student & Assignment Info</h2>
+                    <div class="info-grid">
                         <div class="info-item">
-                            <span class="label">Student Name:</span>
-                            <span id="studentName" class="value">-</span>
+                            <span class="info-label">Student Name</span>
+                            <span class="info-value" id="studentName">-</span>
                         </div>
                         <div class="info-item">
-                            <span class="label">Student ID:</span>
-                            <span id="studentId" class="value">-</span>
+                            <span class="info-label">Student ID</span>
+                            <span class="info-value" id="studentId">-</span>
                         </div>
                         <div class="info-item">
-                            <span class="label">Submission Time:</span>
-                            <span id="submitTime" class="value">-</span>
+                            <span class="info-label">File Name</span>
+                            <span class="info-value" id="fileName">-</span>
                         </div>
                         <div class="info-item">
-                            <span class="label">File Name:</span>
-                            <span id="fileName" class="value">-</span>
+                            <span class="info-label">Submitted At</span>
+                            <span class="info-value" id="submitTime">-</span>
                         </div>
                     </div>
+                </div>
 
-                    <div class="scores-container">
-                        <div class="score-box">
-                            <div class="score-title">Logic</div>
-                            <div class="score-number" id="logicScore">0</div>
-                            <div class="score-max">/40</div>
+                <!-- Evaluation Result -->
+                <div class="card" id="resultCard" style="display: none;">
+                    <h2><i class="fas fa-clipboard-check"></i> Evaluation Result</h2>
+                    <div class="score-grid">
+                        <div class="score-item">
+                            <span class="score-label">Logic</span>
                             <div class="score-bar">
                                 <div class="score-fill" id="logicBar"></div>
                             </div>
+                            <span class="score-value" id="logicScore">0</span> / 40
                         </div>
-                        <div class="score-box">
-                            <div class="score-title">Flowchart</div>
-                            <div class="score-number" id="flowchartScore">0</div>
-                            <div class="score-max">/30</div>
+                        <div class="score-item">
+                            <span class="score-label">Flowchart</span>
                             <div class="score-bar">
                                 <div class="score-fill" id="flowchartBar"></div>
                             </div>
+                            <span class="score-value" id="flowchartScore">0</span> / 30
                         </div>
-                        <div class="score-box">
-                            <div class="score-title">Pseudocode</div>
-                            <div class="score-number" id="pseudocodeScore">0</div>
-                            <div class="score-max">/20</div>
+                        <div class="score-item">
+                            <span class="score-label">Pseudocode</span>
                             <div class="score-bar">
                                 <div class="score-fill" id="pseudocodeBar"></div>
                             </div>
+                            <span class="score-value" id="pseudocodeScore">0</span> / 20
                         </div>
-                        <div class="score-box">
-                            <div class="score-title">Format</div>
-                            <div class="score-number" id="formattingScore">0</div>
-                            <div class="score-max">/10</div>
+                        <div class="score-item">
+                            <span class="score-label">Formatting</span>
                             <div class="score-bar">
                                 <div class="score-fill" id="formattingBar"></div>
                             </div>
+                            <span class="score-value" id="formattingScore">0</span> / 10
                         </div>
                     </div>
 
                     <div class="total-score">
-                        <div class="total-label">Total Score</div>
-                        <div class="total-number" id="totalScore">0</div>
-                        <div class="total-max">/100</div>
+                        <span>Total Score</span>
+                        <span class="total-value" id="totalScore">0 / 100</span>
                     </div>
 
                     <div class="feedback-section">
-                        <h3><i class="fas fa-comment-dots"></i> AI Feedback</h3>
-                        <div class="feedback-content" id="feedbackText">
-                            Waiting for grading results...
-                        </div>
+                        <h3><i class="fas fa-comments"></i> AI Feedback</h3>
+                        <pre id="feedbackText" class="feedback-text">No feedback yet.</pre>
                     </div>
 
-                    <div class="action-buttons">
+                    <div class="result-actions">
+                        <button class="btn-secondary" onclick="resetAssessment()">
+                            <i class="fas fa-redo"></i> Reset
+                        </button>
                         <button class="btn-success" onclick="generatePDF()">
                             <i class="fas fa-file-pdf"></i> Download PDF Report
-                        </button>
-                        <button class="btn-info" onclick="saveToHistory()">
-                            <i class="fas fa-save"></i> Save to History
-                        </button>
-                        <button class="btn-warning" onclick="resetAssessment()">
-                            <i class="fas fa-redo"></i> Regrade
                         </button>
                     </div>
                 </div>
 
-                <div class="card history-card">
-                    <h2><i class="fas fa-history"></i> Grading History</h2>
-                    <div class="history-controls">
-                        <button class="btn-small" onclick="clearHistory()">
-                            <i class="fas fa-trash"></i> Clear All
+                <!-- History & Dashboard -->
+                <div class="card">
+                    <h2><i class="fas fa-history"></i> Grading History & Dashboard</h2>
+                    <div class="dashboard-grid">
+                        <div class="stat-card">
+                            <span class="stat-label">Total Graded</span>
+                            <span class="stat-value" id="statTotal">0</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">Average Score</span>
+                            <span class="stat-value" id="statAverage">0</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">Highest Score</span>
+                            <span class="stat-value" id="statHighest">0</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">Lowest Score</span>
+                            <span class="stat-value" id="statLowest">0</span>
+                        </div>
+                    </div>
+
+                    <div class="history-actions">
+                        <button class="btn-secondary" onclick="exportHistory()">
+                            <i class="fas fa-file-export"></i> Export CSV
                         </button>
-                        <button class="btn-small" onclick="exportHistory()">
-                            <i class="fas fa-download"></i> Export CSV
+                        <button class="btn-secondary" onclick="clearHistory()">
+                            <i class="fas fa-trash-alt"></i> Clear History
                         </button>
                     </div>
-                    <div class="table-container">
-                        <table id="historyTable">
+
+                    <div class="history-table-wrapper">
+                        <table class="history-table">
                             <thead>
                                 <tr>
                                     <th>Student ID</th>
@@ -192,40 +226,39 @@
                                 </tr>
                             </thead>
                             <tbody id="historyBody">
-                                <!-- History will be populated dynamically -->
+                                <!-- History rows will be inserted here -->
                             </tbody>
                         </table>
-                    </div>
-                </div>
-
-                <div class="card stats-card">
-                    <h2><i class="fas fa-chart-pie"></i> Statistics</h2>
-                    <div class="stats-container">
-                        <div class="stat-item">
-                            <div class="stat-value" id="totalAssessments">0</div>
-                            <div class="stat-label">Total Graded</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-value" id="avgScore">0.0</div>
-                            <div class="stat-label">Average Score</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-value" id="highestScore">0</div>
-                            <div class="stat-label">Highest Score</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-value" id="lowestScore">0</div>
-                            <div class="stat-label">Lowest Score</div>
-                        </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Loading Overlay -->
+        <!-- Cloud Submissions (Google Drive) -->
+        <div class="card cloud-card">
+            <h2><i class="fas fa-cloud"></i> Cloud Submissions (Google Drive)</h2>
+            <p class="small-text">Files inside your shared Google Drive folder will appear here.</p>
+            <div class="table-container">
+                <table id="cloudFilesTable">
+                    <thead>
+                        <tr>
+                            <th>File Name</th>
+                            <th>Size (KB)</th>
+                            <th>Modified Time</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cloudFilesBody">
+                        <!-- Cloud files will be loaded here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Loader Overlay -->
         <div class="loader-overlay" id="loaderOverlay">
-            <div class="loader-content">
-                <div class="loader-spinner"></div>
+            <div class="loader-card">
+                <div class="spinner"></div>
                 <p>AI is grading, please wait...</p>
                 <p class="loader-sub">Analyzing programming logic</p>
             </div>
