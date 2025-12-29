@@ -510,3 +510,85 @@ footer {
         grid-template-columns: 1fr;
     }
 }
+
+
+/* Cloud Scan Results Styles */
+.cloud-scan-results {
+    margin-top: 20px;
+    padding: 20px;
+    background: #f8f9ff;
+    border-radius: 10px;
+    border: 1px solid #e1e5eb;
+    animation: slideIn 0.3s ease-out;
+}
+
+.cloud-scan-results h4 {
+    color: #2c3e50;
+    margin-bottom: 15px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.scan-results-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.scan-item {
+    display: grid;
+    grid-template-columns: 120px 150px 80px auto;
+    gap: 15px;
+    padding: 10px 15px;
+    background: white;
+    border-radius: 8px;
+    border: 1px solid #e1e5eb;
+    align-items: center;
+    transition: all 0.2s ease;
+}
+
+.scan-item:hover {
+    background: #f0f5ff;
+    border-color: #667eea;
+    transform: translateX(5px);
+}
+
+.student-id {
+    font-family: monospace;
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.student-name {
+    color: #333;
+}
+
+.score {
+    font-weight: bold;
+    color: #667eea;
+    text-align: center;
+}
+
+.status {
+    color: #28a745;
+    font-weight: 600;
+    text-align: right;
+}
+
+/* Animation */
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* 确保按钮有ID */
+#cloudScanBtn {
+    position: relative;
+}
