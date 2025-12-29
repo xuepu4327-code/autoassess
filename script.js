@@ -1,22 +1,56 @@
+// ========== System Architecture Configuration ==========
+const SYSTEM_ARCHITECTURE = {
+    // 当前实现（前端原型）
+    current: {
+        frontend: "Static HTML/CSS/JS",
+        backend: "Direct API calls (for demo) or Mock",
+        storage: "LocalStorage (browser)",
+        monitoring: "Google Drive API (on-demand scan)",
+        security: "API key in client (⚠️ demo only, real deployment move to backend)"
+    },
+    
+    // 生产环境架构（报告 & presentation 可以讲）
+    production: {
+        frontend: "SPA (React/Vue)",
+        backend: "Node.js/Express API server or Cloud Functions",
+        database: "Firestore/PostgreSQL",
+        storage: "Google Cloud Storage / Drive",
+        monitoring: "Google Drive API + Cloud Functions (auto trigger)",
+        security: "API keys in environment variables, JWT auth",
+        deployment: "Docker containers on GCP/Azure"
+    }
+};
+
+console.log("=== AutoAssess System Architecture ===");
+console.log("Current (Prototype):", SYSTEM_ARCHITECTURE.current);
+console.log("Production Ready:", SYSTEM_ARCHITECTURE.production);
+
 // ========== Global Variables & Configuration ==========
 const CONFIG = {
-    GEMINI_API_KEY: "YOUR_API_KEY_HERE", // Replace with your actual Gemini API key
-    MAX_FILE_SIZE: 15 * 1024 * 1024, // 15MB
+    // 如果你没有 Gemini key，可以不改它，系统会自动用 demo 模式
+    GEMINI_API_KEY: "KEY",
+    MAX_FILE_SIZE: 15 * 1024 * 1024,
     DEFAULT_RUBRIC: {
         logic: 40,
         flowchart: 30,
         pseudocode: 20,
         formatting: 10
-    }
+    },
+
+    // ✅ Google Drive 配置
+    // 1. 把下面这一行换成你自己的 Google API key
+    // 2. FOLDER ID 我已经帮你填好，是你给的那个 Drive folder
+    DRIVE_API_KEY: "KEY",
+    DRIVE_FOLDER_ID: "1u_fbuHDpIeA7G510h5ZoQgrafxLcSq_B"
 };
 
 // ========== Utility Functions ==========
 // Extract student info from filename
 function extractStudentInfo(filename) {
     const patterns = [
-        /^(\w+)[-_]([\p{L}\s]+)[-_]/u, // studentID_name_
-        /^([A-Z]\d+)[-_](.+?)(?=\.[^.]+$)/, // B12345678_John.pdf
-        /^(\d+)[-_](.+)/ // 12345678_John
+        /^(\w+)[-_]([\p{L}\s]+)[-_]/u,       // studentID_name_
+        /^([A-Z]\d+)[-_](.+?)(?=\.[^.]+$)/,  // B12345678_John.pdf
+        /^(\d+)[-_](.+)/                     // 12345678_John
     ];
     
     for (const pattern of patterns) {
@@ -29,7 +63,7 @@ function extractStudentInfo(filename) {
         }
     }
     
-    // Fallback
+    // Fallback：前 10 个字符当 ID，后面当名字
     const nameWithoutExt = filename.split('.')[0];
     return {
         studentId: nameWithoutExt.substring(0, 10) || 'UNKNOWN',
@@ -37,7 +71,36 @@ function extractStudentInfo(filename) {
     };
 }
 
-// Read file content
+// Extract student info from document content (fallback)
+function extractStudentInfoFromContent(text) {
+    if (!text) return null;
+    
+    // 尝试找 7–10 位数字当作 student ID
+    const idMatch = text.match(/\b(\d{7,10})\b/);
+    let studentId = idMatch ? idMatch[1] : "";
+    
+    // 尝试找 "Name: xxx" 这一行
+    let studentName = "";
+    const lines = text.split(/\r?\n/);
+    for (const line of lines) {
+        const match = line.match(/name\s*[:\-]\s*(.+)/i);
+        if (match) {
+            studentName = match[1].trim();
+            break;
+        }
+    }
+    
+    if (!studentId && !studentName) {
+        return null;
+    }
+    
+    return {
+        studentId: studentId || "UNKNOWN",
+        studentName: studentName || "UNKNOWN"
+    };
+}
+
+// Read local file content (for manual upload)
 async function readFileContent(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -48,7 +111,10 @@ async function readFileContent(file) {
             } else if (file.name.endsWith('.pdf')) {
                 resolve(`[PDF File] ${file.name} (Size: ${formatFileSize(file.size)})`);
             } else {
-                resolve(`File preview not available. Use plain text files for best results.\nFile Name: ${file.name}\nFile Type: ${file.type}\nFile Size: ${formatFileSize(file.size)}`);
+                resolve(
+                    `File preview not available. Use plain text for full AI analysis.\n` +
+                    `File Name: ${file.name}\nFile Type: ${file.type}\nFile Size: ${formatFileSize(file.size)}`
+                );
             }
         };
         
@@ -57,120 +123,333 @@ async function readFileContent(file) {
         if (file.type.includes('text') || file.name.endsWith('.txt')) {
             reader.readAsText(file);
         } else {
-            // For non-text files, read basic info only
-            resolve(`Non-text file: ${file.name}`);
+            reader.readAsArrayBuffer(file);
         }
     });
 }
 
-// Format file size
 function formatFileSize(bytes) {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let size = bytes;
+    let unitIndex = 0;
+    
+    while (size >= 1024 && unitIndex < units.length - 1) {
+        size /= 1024;
+        unitIndex++;
+    }
+    
+    return `${size.toFixed(1)} ${units[unitIndex]}`;
 }
 
-// ========== AI Grading Core ==========
-async function evaluateWithAI(content, rubric) {
+// Update student info UI
+function updateStudentInfo(studentId, studentName, fileName) {
+    document.getElementById('studentId').textContent = studentId || 'UNKNOWN';
+    document.getElementById('studentName').textContent = studentName || 'Unnamed Student';
+    document.getElementById('fileName').textContent = fileName || '-';
+    document.getElementById('submitTime').textContent = new Date().toLocaleString('en-US');
+}
+
+function updateFeedback(text) {
+    document.getElementById('feedbackText').textContent = text;
+}
+
+// ========== Google Drive Integration ==========
+
+// 列出 Google Drive folder 里的档案
+async function listDriveFiles() {
+    const { DRIVE_API_KEY, DRIVE_FOLDER_ID } = CONFIG;
+    if (!DRIVE_API_KEY || !DRIVE_FOLDER_ID) {
+        alert("Drive API is not configured. Please set DRIVE_API_KEY and DRIVE_FOLDER_ID.");
+        return [];
+    }
+
+    const query = `'${DRIVE_FOLDER_ID}' in parents and trashed = false`;
+    const fields = "files(id,name,mimeType,modifiedTime,size)";
+    const url =
+        "https://www.googleapis.com/drive/v3/files" +
+        `?q=${encodeURIComponent(query)}` +
+        `&fields=${encodeURIComponent(fields)}` +
+        `&key=${DRIVE_API_KEY}`;
+
+    const res = await fetch(url);
+    if (!res.ok) {
+        console.error("Drive API error", await res.text());
+        alert("Failed to read Google Drive folder. Please check API key & sharing settings.");
+        return [];
+    }
+
+    const data = await res.json();
+    return data.files || [];
+}
+
+// 从 Google Drive 下载档案内容（先支援文字档）
+async function downloadDriveFile(fileId) {
+    const { DRIVE_API_KEY } = CONFIG;
+    const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${DRIVE_API_KEY}`;
+
+    const res = await fetch(url);
+    if (!res.ok) {
+        throw new Error("Download from Drive failed");
+    }
+
+    // 这里只处理纯文字档
+    return await res.text();
+}
+
+// 按钮：Scan Google Drive Folder
+async function scanDriveFolder() {
     showLoader(true);
-    
     try {
-        // Check API key
-        if (!CONFIG.GEMINI_API_KEY || CONFIG.GEMINI_API_KEY === "YOUR_API_KEY_HERE") {
-            throw new Error("Please set a valid Gemini API key in script.js");
+        const files = await listDriveFiles();
+        if (!files.length) {
+            alert("No files found in Google Drive folder.");
+            renderCloudFilesTable([]); // 清空表格
+            return;
         }
-        
-        const prompt = createEvaluationPrompt(content, rubric);
-        
-        const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${CONFIG.GEMINI_API_KEY}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{
-                        parts: [{ text: prompt }]
-                    }]
-                })
-            }
-        );
-        
-        if (!response.ok) {
-            throw new Error(`API request failed: ${response.status}`);
-        }
-        
-        const data = await response.json();
-        
-        if (!data.candidates || !data.candidates[0]) {
-            throw new Error("Invalid AI response format");
-        }
-        
-        const aiText = data.candidates[0].content.parts[0].text;
-        
-        // Try to parse JSON
-        try {
-            const jsonMatch = aiText.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-                return JSON.parse(jsonMatch[0]);
-            }
-        } catch (e) {
-            console.warn("Could not parse AI JSON response, using fallback");
-        }
-        
-        // Fallback: Create mock evaluation
-        return createMockEvaluation(content);
-        
-    } catch (error) {
-        console.error("AI grading error:", error);
-        
-        // If API fails, use mock data for demonstration
-        if (error.message.includes("API")) {
-            alert("API call failed, using demo mode. Please check your API key.");
-            return createMockEvaluation(content);
-        }
-        
-        throw error;
+
+        renderCloudFilesTable(files);
+    } catch (e) {
+        console.error(e);
+        alert("Cloud scan failed: " + e.message);
     } finally {
         showLoader(false);
     }
 }
 
-// Create evaluation prompt
+// 把 Drive 文件列表显示在表格里
+function renderCloudFilesTable(files) {
+    const tbody = document.getElementById("cloudFilesBody");
+    if (!tbody) return; // 如果 HTML 还没加这块，就不做事
+
+    tbody.innerHTML = "";
+
+    files.forEach(file => {
+        const tr = document.createElement("tr");
+        const sizeKB = file.size ? (file.size / 1024).toFixed(1) : "-";
+        const time = file.modifiedTime
+            ? new Date(file.modifiedTime).toLocaleString("en-US")
+            : "-";
+
+        // 注意：要 escape 单引号，避免 HTML 破坏
+        const safeName = file.name.replace(/'/g, "\\'");
+
+        tr.innerHTML = `
+            <td>${file.name}</td>
+            <td>${sizeKB}</td>
+            <td>${time}</td>
+            <td>
+                <button class="table-btn" onclick="gradeDriveFile('${file.id}', '${safeName}')">
+                    <i class="fas fa-magic"></i> Grade
+                </button>
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+// 对云端档案做评分（跟本地上传类似）
+async function gradeDriveFile(fileId, fileName) {
+    try {
+        showLoader(true);
+
+        // 1. 从 Drive 下载作业内容
+        const content = await downloadDriveFile(fileId);
+
+        // 2. 从档名 & 内容抓学生资料
+        const infoFromName = extractStudentInfo(fileName) || {};
+        const infoFromContent = extractStudentInfoFromContent(content) || {};
+
+        let studentId = infoFromName.studentId || infoFromContent.studentId || "UNKNOWN";
+        let studentName = infoFromName.studentName || infoFromContent.studentName || "UNKNOWN";
+
+        updateStudentInfo(studentId, studentName, fileName);
+
+        // 3. 取当前的 rubric
+        const rubric = getCurrentRubric();
+
+        // 4. 叫 AI（或 mock）打分
+        const result = await evaluateWithAI(content, rubric);
+
+        // 5. 更新右边的结果卡片
+        document.getElementById("resultCard").style.display = "block";
+        updateScoresDisplay(result.scores, result.total);
+        updateFeedback(result.feedback);
+
+        // 6. 存 history（如果有勾 Save History）
+        if (document.getElementById("saveHistory").checked) {
+            saveAssessmentToHistory(studentId, studentName, result, fileName);
+        }
+
+        // 7. Auto-download report (optional)
+        if (document.getElementById('autoDownload').checked) {
+            setTimeout(() => generatePDF(), 800);
+        }
+
+    } catch (e) {
+        console.error(e);
+        alert("Failed to grade cloud file: " + e.message);
+    } finally {
+        showLoader(false);
+    }
+}
+
+// ========== AI Evaluation Logic ==========
+
+// 1. 生成给 Gemini 的提示词
 function createEvaluationPrompt(content, rubric) {
-    return `You are a programming course teaching assistant. Please evaluate the student assignment based on the following rubric.
+    const { logic, flowchart, pseudocode, formatting } = rubric;
+    
+    return `
+You are a strict programming logic lecturer.
 
-Grading Rubric (Total 100 points):
-1. Logic Correctness: ${rubric.logic} points - Is the program logic correct and complete?
-2. Flowchart Completeness: ${rubric.flowchart} points - Is the flowchart complete and logically clear?
-3. Pseudocode Structure: ${rubric.pseudocode} points - Is the pseudocode well-structured and readable?
-4. Document Format: ${rubric.formatting} points - Does the format meet specifications?
+Grade the student's assignment based on this rubric:
 
-Student Assignment Content:
-${content.substring(0, 2000)} ${content.length > 2000 ? '...(content truncated due to length)' : ''}
+- logic: 0~${logic}
+- flowchart: 0~${flowchart}
+- pseudocode: 0~${pseudocode}
+- formatting: 0~${formatting}
 
-Return STRICT JSON format containing:
-1. "scores" object: actual scores for four categories (must be integers)
-2. "feedback" string: specific feedback pointing out strengths and improvements (in English)
-3. "total" number: total score
+Return ONLY a JSON object, no explanation, no backticks, no extra text.
+Use this exact format:
 
-Example format:
 {
   "scores": {
-    "logic": 35,
-    "flowchart": 25,
-    "pseudocode": 18,
-    "formatting": 8
+    "logic": number,
+    "flowchart": number,
+    "pseudocode": number,
+    "formatting": number
   },
-  "feedback": "Logic is clear, flowchart is complete, but pseudocode lacks comments...",
-  "total": 86
+  "total": number,
+  "feedback": "string"
 }
 
-Please evaluate now and return JSON:`;
+Now evaluate this submission:
+
+${content}
+`;
 }
 
-// Mock evaluation (when API is unavailable)
+// 2. 调用 Gemini 做真实评分（失败才退回 demo）
+async function evaluateWithAI(content, rubric) {
+    showLoader(true);
+    
+    try {
+        // 读取下拉选单：Gemini / Demo
+        const modelSelect = document.getElementById('aiModel');
+        const model = modelSelect ? modelSelect.value : 'gemini-pro';
+        
+        // 如果用户选 Demo Mode，就直接用 mock
+        if (model === 'mock') {
+            console.warn("Demo mode selected, using mock evaluation.");
+            return createMockEvaluation(content);
+        }
+        
+        // 没有设 GEMINI_API_KEY 的话，也退回 demo
+        if (!CONFIG.GEMINI_API_KEY || CONFIG.GEMINI_API_KEY === "YOUR_GEMINI_API_KEY_HERE") {
+            console.warn("No Gemini API key set, using demo mode instead.");
+            return createMockEvaluation(content);
+        }
+        
+        const prompt = createEvaluationPrompt(content, rubric);
+
+        // 真正呼叫 Gemini API
+const response = await fetch(
+  `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key=${CONFIG.GEMINI_API_KEY}`,
+  {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{
+        parts: [{ text: prompt }]
+      }]
+    })
+  }
+);
+        if (!response.ok) {
+            const errText = await response.text();
+            console.error("Gemini API HTTP error:", response.status, errText);
+            alert("Gemini API 调用失败，已切换为 demo 模式。（HTTP " + response.status + "）");
+            return createMockEvaluation(content);
+        }
+        
+        const data = await response.json();
+        console.log("Gemini raw response:", data);
+
+        // 从 Gemini 回传结果里把文字抓出来
+        let textResponse = "";
+        try {
+            const candidates = data.candidates || [];
+            if (candidates.length > 0 && candidates[0].content && candidates[0].content.parts) {
+                textResponse = candidates[0].content.parts
+                    .map(p => p.text || "")
+                    .join("\n");
+            }
+        } catch (e) {
+            console.warn("Unexpected Gemini API response format", e);
+        }
+        
+        if (!textResponse) {
+            console.warn("Empty AI response, using mock evaluation");
+            return createMockEvaluation(content);
+        }
+        
+        // 尝试从文字中截出 JSON（避免前后有多余文字）
+        const match = textResponse.match(/\{[\s\S]*\}/);
+        if (!match) {
+            console.warn("No JSON found in AI response, using mock evaluation");
+            return createMockEvaluation(content);
+        }
+        
+        let parsed;
+        try {
+            parsed = JSON.parse(match[0]);
+        } catch (e) {
+            console.warn("Could not parse AI JSON response, using mock evaluation", e);
+            return createMockEvaluation(content);
+        }
+        
+        // 简单检查结构
+        if (!parsed || !parsed.scores || typeof parsed.total !== "number") {
+            console.warn("AI JSON format not as expected, using mock evaluation");
+            return createMockEvaluation(content);
+        }
+        
+        return parsed;
+        
+    } catch (error) {
+        console.error("AI grading error:", error);
+        alert("AI grading failed, using demo mode instead.");
+        return createMockEvaluation(content);
+    } finally {
+        showLoader(false);
+    }
+}
+
+// 3. 没连到 Gemini 时的示范评分（Demo Mode）
+function createMockEvaluation(content) {
+    const length = content.length;
+    const mockScores = {
+        logic: Math.min(40, Math.floor(length / 50) + 20),
+        flowchart: Math.min(30, Math.floor(length / 80) + 15),
+        pseudocode: Math.min(20, Math.floor(length / 100) + 10),
+        formatting: Math.min(10, Math.floor(length / 200) + 5)
+    };
+    
+    // 限制在合法范围内
+    Object.keys(mockScores).forEach(key => {
+        mockScores[key] = Math.max(0, Math.min(CONFIG.DEFAULT_RUBRIC[key], mockScores[key]));
+    });
+    
+    const total = Object.values(mockScores).reduce((a, b) => a + b, 0);
+    
+    return {
+        scores: mockScores,
+        feedback: "[DEMO MODE] 目前使用示范评分结果。\n请确认 Gemini API key 正确配置后，即可启用真实 AI 批改。",
+        total
+    };
+}
+
+
 function createMockEvaluation(content) {
     const length = content.length;
     const mockScores = {
@@ -189,45 +468,19 @@ function createMockEvaluation(content) {
     
     return {
         scores: mockScores,
-        feedback: "[DEMO MODE] This is a mock evaluation result. Connect to Gemini API for real grading.\n\nSuggestions:\n1. Logic could be further optimized\n2. Flowchart needs more details\n3. Pseudocode format should be consistent\n4. Document structure is good",
-        total: total
+        feedback: "[DEMO MODE] This is a mock evaluation result.\n\n1. Logic is generally acceptable but can be improved.\n2. Flowchart needs more details and proper symbols.\n3. Pseudocode format should be consistent with standard convention.\n4. Formatting can be cleaner (indentation, spacing).",
+        total
     };
 }
 
-// ========== UI Update Functions ==========
-function updateScoresDisplay(scores, total) {
-    // Update score numbers
-    document.getElementById('logicScore').textContent = scores.logic;
-    document.getElementById('flowchartScore').textContent = scores.flowchart;
-    document.getElementById('pseudocodeScore').textContent = scores.pseudocode;
-    document.getElementById('formattingScore').textContent = scores.formatting;
-    document.getElementById('totalScore').textContent = total;
-    
-    // Update progress bars
-    const maxScores = CONFIG.DEFAULT_RUBRIC;
-    setTimeout(() => {
-        document.getElementById('logicBar').style.width = `${(scores.logic / maxScores.logic) * 100}%`;
-        document.getElementById('flowchartBar').style.width = `${(scores.flowchart / maxScores.flowchart) * 100}%`;
-        document.getElementById('pseudocodeBar').style.width = `${(scores.pseudocode / maxScores.pseudocode) * 100}%`;
-        document.getElementById('formattingBar').style.width = `${(scores.formatting / maxScores.formatting) * 100}%`;
-    }, 100);
-    
-    // Update statistics
-    updateStatistics();
+// ========== Loader ==========
+function showLoader(show) {
+    const overlay = document.getElementById('loaderOverlay');
+    if (!overlay) return;
+    overlay.style.display = show ? 'flex' : 'none';
 }
 
-function updateStudentInfo(studentId, studentName, fileName) {
-    document.getElementById('studentId').textContent = studentId;
-    document.getElementById('studentName').textContent = studentName;
-    document.getElementById('fileName').textContent = fileName;
-    document.getElementById('submitTime').textContent = new Date().toLocaleString('en-US');
-}
-
-function updateFeedback(text) {
-    document.getElementById('feedbackText').textContent = text;
-}
-
-// ========== Main Process Functions ==========
+// ========== Main Process Functions (Local Upload) ==========
 async function processFile() {
     const fileInput = document.getElementById('fileInput');
     const file = fileInput.files[0];
@@ -247,12 +500,27 @@ async function processFile() {
     document.getElementById('resultCard').style.display = 'block';
     
     try {
-        // 1. Extract student info
-        const { studentId, studentName } = extractStudentInfo(file.name);
-        updateStudentInfo(studentId, studentName, file.name);
-        
-        // 2. Read file content
+        // 1. Read file content
         const content = await readFileContent(file);
+        
+        // 2. Extract student info (filename + document content)
+        const infoFromName = extractStudentInfo(file.name) || {};
+        const infoFromContent = extractStudentInfoFromContent(content) || {};
+        
+        let studentId = infoFromName.studentId;
+        let studentName = infoFromName.studentName;
+        
+        if ((!studentId || studentId === 'UNKNOWN') && infoFromContent.studentId) {
+            studentId = infoFromContent.studentId;
+        }
+        if ((!studentName || studentName === 'Unnamed Student' || studentName === 'UNKNOWN') && infoFromContent.studentName) {
+            studentName = infoFromContent.studentName;
+        }
+        
+        if (!studentId) studentId = 'UNKNOWN';
+        if (!studentName) studentName = 'UNKNOWN';
+        
+        updateStudentInfo(studentId, studentName, file.name);
         
         // 3. Get current rubric
         const rubric = getCurrentRubric();
@@ -292,16 +560,130 @@ function getCurrentRubric() {
 }
 
 function updateRubric() {
-    // Update display values
-    document.getElementById('logicValue').textContent = document.getElementById('logicWeight').value;
-    document.getElementById('flowchartValue').textContent = document.getElementById('flowchartWeight').value;
-    document.getElementById('pseudocodeValue').textContent = document.getElementById('pseudocodeWeight').value;
-    document.getElementById('formattingValue').textContent = document.getElementById('formattingWeight').value;
+    const rubric = getCurrentRubric();
+    const total = rubric.logic + rubric.flowchart + rubric.pseudocode + rubric.formatting;
     
-    alert('Grading rubric updated');
+    if (total !== 100) {
+        alert(`Total weight is ${total}%. System will normalize to 100%.`);
+    }
+    
+    document.getElementById('logicWeightLabel').textContent = rubric.logic + '%';
+    document.getElementById('flowchartWeightLabel').textContent = rubric.flowchart + '%';
+    document.getElementById('pseudocodeWeightLabel').textContent = rubric.pseudocode + '%';
+    document.getElementById('formattingWeightLabel').textContent = rubric.formatting + '%';
 }
 
-// ========== History Management ==========
+// Update score bars & labels
+function updateScoresDisplay(scores, total) {
+    const logicBar = document.getElementById('logicBar');
+    const flowchartBar = document.getElementById('flowchartBar');
+    const pseudocodeBar = document.getElementById('pseudocodeBar');
+    const formattingBar = document.getElementById('formattingBar');
+    
+    const logicScore = document.getElementById('logicScore');
+    const flowchartScore = document.getElementById('flowchartScore');
+    const pseudocodeScore = document.getElementById('pseudocodeScore');
+    const formattingScore = document.getElementById('formattingScore');
+    const totalScore = document.getElementById('totalScore');
+    
+    logicBar.style.width = `${(scores.logic / CONFIG.DEFAULT_RUBRIC.logic) * 100}%`;
+    flowchartBar.style.width = `${(scores.flowchart / CONFIG.DEFAULT_RUBRIC.flowchart) * 100}%`;
+    pseudocodeBar.style.width = `${(scores.pseudocode / CONFIG.DEFAULT_RUBRIC.pseudocode) * 100}%`;
+    formattingBar.style.width = `${(scores.formatting / CONFIG.DEFAULT_RUBRIC.formatting) * 100}%`;
+    
+    logicScore.textContent = scores.logic;
+    flowchartScore.textContent = scores.flowchart;
+    pseudocodeScore.textContent = scores.pseudocode;
+    formattingScore.textContent = scores.formatting;
+    totalScore.textContent = `${total} / 100`;
+}
+
+// ========== Report Generation ==========
+function generatePDF() {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    
+    const studentName = document.getElementById('studentName').textContent;
+    const studentId = document.getElementById('studentId').textContent;
+    const fileName = document.getElementById('fileName').textContent;
+    const submitTime = document.getElementById('submitTime').textContent;
+    
+    const logic = document.getElementById('logicScore').textContent;
+    const flowchart = document.getElementById('flowchartScore').textContent;
+    const pseudocode = document.getElementById('pseudocodeScore').textContent;
+    const formatting = document.getElementById('formattingScore').textContent;
+    const total = document.getElementById('totalScore').textContent;
+    const feedback = document.getElementById('feedbackText').textContent;
+    
+    const pageWidth = doc.internal.pageSize.getWidth();
+    let y = 20;
+    
+    doc.setFontSize(18);
+    doc.text("AutoAssess - Assignment Evaluation Report", pageWidth / 2, y, { align: 'center' });
+    
+    y += 15;
+    doc.setFontSize(12);
+    doc.text(`Student Name: ${studentName}`, 20, y);
+    y += 7;
+    doc.text(`Student ID: ${studentId}`, 20, y);
+    y += 7;
+    doc.text(`File Name: ${fileName}`, 20, y);
+    y += 7;
+    doc.text(`Submitted At: ${submitTime}`, 20, y);
+    
+    y += 12;
+    doc.setFontSize(14);
+    doc.text("Scores", 20, y);
+    
+    y += 10;
+    doc.setFontSize(12);
+    doc.text(`Logic: ${logic} / 40`, 20, y);
+    y += 7;
+    doc.text(`Flowchart: ${flowchart} / 30`, 20, y);
+    y += 7;
+    doc.text(`Pseudocode: ${pseudocode} / 20`, 20, y);
+    y += 7;
+    doc.text(`Formatting: ${formatting} / 10`, 20, y);
+    y += 10;
+    doc.text(`Total: ${total}`, 20, y);
+    
+    y += 12;
+    doc.setFontSize(14);
+    doc.text("Feedback", 20, y);
+    
+    y += 10;
+    doc.setFontSize(11);
+    
+    const splitFeedback = doc.splitTextToSize(feedback, pageWidth - 40);
+    doc.text(splitFeedback, 20, y);
+    
+    const safeFileName = `${studentId || 'student'}_${studentName || 'report'}_autoassess.pdf`;
+    doc.save(safeFileName.replace(/\s+/g, '_'));
+}
+
+// ========== Reset ==========
+function resetAssessment() {
+    document.getElementById('resultCard').style.display = 'none';
+    document.getElementById('logicBar').style.width = '0%';
+    document.getElementById('flowchartBar').style.width = '0%';
+    document.getElementById('pseudocodeBar').style.width = '0%';
+    document.getElementById('formattingBar').style.width = '0%';
+    
+    document.getElementById('logicScore').textContent = '0';
+    document.getElementById('flowchartScore').textContent = '0';
+    document.getElementById('pseudocodeScore').textContent = '0';
+    document.getElementById('formattingScore').textContent = '0';
+    document.getElementById('totalScore').textContent = '0 / 100';
+    
+    document.getElementById('feedbackText').textContent = 'No feedback yet.';
+}
+
+// ========== History & Statistics ==========
+function getHistory() {
+    const historyJson = localStorage.getItem('autoassess_history');
+    return historyJson ? JSON.parse(historyJson) : [];
+}
+
 function saveAssessmentToHistory(studentId, studentName, result, fileName) {
     const history = getHistory();
     
@@ -324,278 +706,164 @@ function saveAssessmentToHistory(studentId, studentName, result, fileName) {
     updateStatistics();
 }
 
-function getHistory() {
-    const historyJson = localStorage.getItem('autoassess_history');
-    return historyJson ? JSON.parse(historyJson) : [];
-}
-
 function updateHistoryTable() {
     const history = getHistory();
     const tbody = document.getElementById('historyBody');
+    if (!tbody) return;
+
+    tbody.innerHTML = '';
     
-    tbody.innerHTML = history.map(item => `
-        <tr>
-            <td>${item.studentId}</td>
-            <td>${item.studentName}</td>
-            <td><strong>${item.total}</strong>/100</td>
-            <td>${new Date(item.timestamp).toLocaleDateString('en-US')}</td>
+    history.forEach(record => {
+        const tr = document.createElement('tr');
+        
+        tr.innerHTML = `
+            <td>${record.studentId}</td>
+            <td>${record.studentName}</td>
+            <td>${record.total}</td>
+            <td>${record.date}</td>
             <td>
-                <button onclick="viewHistoryDetail(${item.id})" class="btn-small">
-                    <i class="fas fa-eye"></i> View
+                <button class="table-btn" onclick="viewHistoryDetail(${record.id})">
+                    <i class="fas fa-eye"></i>
                 </button>
-                <button onclick="deleteHistoryItem(${item.id})" class="btn-small">
-                    <i class="fas fa-trash"></i> Delete
+                <button class="table-btn" onclick="deleteHistoryItem(${record.id})">
+                    <i class="fas fa-trash-alt"></i>
                 </button>
             </td>
-        </tr>
-    `).join('');
+        `;
+        
+        tbody.appendChild(tr);
+    });
 }
 
 function updateStatistics() {
     const history = getHistory();
     
     if (history.length === 0) {
-        document.getElementById('totalAssessments').textContent = '0';
-        document.getElementById('avgScore').textContent = '0.0';
-        document.getElementById('highestScore').textContent = '0';
-        document.getElementById('lowestScore').textContent = '0';
+        document.getElementById('statTotal').textContent = '0';
+        document.getElementById('statAverage').textContent = '0';
+        document.getElementById('statHighest').textContent = '0';
+        document.getElementById('statLowest').textContent = '0';
         return;
     }
     
-    const total = history.length;
-    const avgScore = history.reduce((sum, item) => sum + item.total, 0) / total;
-    const highestScore = Math.max(...history.map(item => item.total));
-    const lowestScore = Math.min(...history.map(item => item.total));
+    const totals = history.map(r => r.total);
+    const total = totals.reduce((a, b) => a + b, 0);
     
-    document.getElementById('totalAssessments').textContent = total;
-    document.getElementById('avgScore').textContent = avgScore.toFixed(1);
-    document.getElementById('highestScore').textContent = highestScore;
-    document.getElementById('lowestScore').textContent = lowestScore;
+    document.getElementById('statTotal').textContent = history.length;
+    document.getElementById('statAverage').textContent = (total / history.length).toFixed(1);
+    document.getElementById('statHighest').textContent = Math.max(...totals);
+    document.getElementById('statLowest').textContent = Math.min(...totals);
 }
 
 function clearHistory() {
-    if (confirm('Are you sure you want to clear all grading history? This action cannot be undone.')) {
-        localStorage.removeItem('autoassess_history');
-        updateHistoryTable();
-        updateStatistics();
-        alert('History cleared');
-    }
+    if (!confirm('Are you sure you want to clear all history?')) return;
+    localStorage.removeItem('autoassess_history');
+    updateHistoryTable();
+    updateStatistics();
 }
 
 function exportHistory() {
     const history = getHistory();
     if (history.length === 0) {
-        alert('No history records to export');
+        alert('No history to export.');
         return;
     }
     
-    const csvContent = [
-        ['Student ID', 'Name', 'Logic', 'Flowchart', 'Pseudocode', 'Format', 'Total', 'Time'].join(','),
-        ...history.map(item => [
-            item.studentId,
-            item.studentName,
-            item.scores.logic,
-            item.scores.flowchart,
-            item.scores.pseudocode,
-            item.scores.formatting,
-            item.total,
-            item.date
-        ].join(','))
-    ].join('\n');
+    const headers = ['Student ID', 'Student Name', 'Logic', 'Flowchart', 'Pseudocode', 'Formatting', 'Total', 'Date', 'File Name'];
+    const rows = history.map(r => [
+        r.studentId,
+        r.studentName,
+        r.scores.logic,
+        r.scores.flowchart,
+        r.scores.pseudocode,
+        r.scores.formatting,
+        r.total,
+        r.date,
+        r.fileName
+    ]);
     
-    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const csvContent = [headers, ...rows].map(row => row.join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/cv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    
     const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `autoassess_history_${new Date().toISOString().split('T')[0]}.csv`;
+    link.href = url;
+    link.setAttribute('download', 'autoassess_history.csv');
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
 }
 
 function viewHistoryDetail(id) {
     const history = getHistory();
-    const item = history.find(h => h.id === id);
+    const record = history.find(r => r.id === id);
+    if (!record) return;
     
-    if (item) {
-        alert(`Assessment Details:
-Student: ${item.studentName} (${item.studentId})
-Time: ${item.date}
-File: ${item.fileName}
-Scores: Logic ${item.scores.logic}/40, Flowchart ${item.scores.flowchart}/30, Pseudocode ${item.scores.pseudocode}/20, Format ${item.scores.formatting}/10
-Total: ${item.total}/100
-Feedback: ${item.feedback.substring(0, 200)}...`);
-    }
+    alert(
+        `Student: ${record.studentName} (${record.studentId})\n` +
+        `File: ${record.fileName}\n` +
+        `Score: ${record.total}\n\n` +
+        `Feedback:\n${record.feedback}`
+    );
 }
 
 function deleteHistoryItem(id) {
-    if (confirm('Are you sure you want to delete this record?')) {
-        const history = getHistory();
-        const newHistory = history.filter(h => h.id !== id);
-        localStorage.setItem('autoassess_history', JSON.stringify(newHistory));
-        updateHistoryTable();
-        updateStatistics();
-    }
+    if (!confirm('Delete this record?')) return;
+    
+    let history = getHistory();
+    history = history.filter(r => r.id !== id);
+    localStorage.setItem('autoassess_history', JSON.stringify(history));
+    updateHistoryTable();
+    updateStatistics();
 }
 
-// ========== PDF Report Generation ==========
-function generatePDF() {
-    try {
-        const { jsPDF } = window.jspdf;
-        const doc = new jsPDF();
-        
-        // Basic info
-        const studentId = document.getElementById('studentId').textContent;
-        const studentName = document.getElementById('studentName').textContent;
-        const date = document.getElementById('submitTime').textContent;
-        
-        // Title
-        doc.setFontSize(20);
-        doc.text('AutoAssess Assignment Grading Report', 20, 20);
-        
-        doc.setFontSize(12);
-        doc.text(`Student: ${studentName}`, 20, 35);
-        doc.text(`Student ID: ${studentId}`, 20, 42);
-        doc.text(`Grading Date: ${date}`, 20, 49);
-        
-        // Scores table
-        const scores = {
-            'Logic Correctness': document.getElementById('logicScore').textContent + '/40',
-            'Flowchart Completeness': document.getElementById('flowchartScore').textContent + '/30',
-            'Pseudocode Structure': document.getElementById('pseudocodeScore').textContent + '/20',
-            'Document Format': document.getElementById('formattingScore').textContent + '/10'
-        };
-        
-        let y = 65;
-        Object.entries(scores).forEach(([item, score], i) => {
-            doc.text(`${item}: ${score}`, 20, y + (i * 8));
-        });
-        
-        // Total score
-        const total = document.getElementById('totalScore').textContent;
-        doc.setFontSize(14);
-        doc.text(`Total Score: ${total}/100`, 20, y + 35);
-        
-        // Feedback
-        const feedback = document.getElementById('feedbackText').textContent;
-        doc.setFontSize(12);
-        doc.text('Feedback:', 20, y + 50);
-        doc.setFontSize(10);
-        const splitFeedback = doc.splitTextToSize(feedback, 170);
-        doc.text(splitFeedback, 20, y + 60);
-        
-        // Save
-        doc.save(`${studentId}_${studentName}_Grading_Report.pdf`);
-        
-    } catch (error) {
-        console.error('PDF generation failed:', error);
-        alert('PDF generation failed. Please check if jsPDF library is loaded correctly.');
-    }
-}
-
-// ========== Other Functions ==========
-function resetAssessment() {
-    if (confirm('Are you sure you want to reset the current grading?')) {
-        document.getElementById('resultCard').style.display = 'none';
-        document.getElementById('fileInput').value = '';
-        
-        // Reset score display
-        document.getElementById('logicScore').textContent = '0';
-        document.getElementById('flowchartScore').textContent = '0';
-        document.getElementById('pseudocodeScore').textContent = '0';
-        document.getElementById('formattingScore').textContent = '0';
-        document.getElementById('totalScore').textContent = '0';
-        document.getElementById('feedbackText').textContent = 'Waiting for grading results...';
-        
-        // Reset progress bars
-        ['logicBar', 'flowchartBar', 'pseudocodeBar', 'formattingBar'].forEach(id => {
-            document.getElementById(id).style.width = '0%';
-        });
-    }
-}
-
-function showLoader(show) {
-    document.getElementById('loaderOverlay').style.display = show ? 'flex' : 'none';
-}
-
-// ========== Event Listeners & Initialization ==========
-document.addEventListener('DOMContentLoaded', function() {
-    // Initialize slider displays
-    document.getElementById('logicWeight').addEventListener('input', function() {
-        document.getElementById('logicValue').textContent = this.value;
-    });
-    document.getElementById('flowchartWeight').addEventListener('input', function() {
-        document.getElementById('flowchartValue').textContent = this.value;
-    });
-    document.getElementById('pseudocodeWeight').addEventListener('input', function() {
-        document.getElementById('pseudocodeValue').textContent = this.value;
-    });
-    document.getElementById('formattingWeight').addEventListener('input', function() {
-        document.getElementById('formattingValue').textContent = this.value;
-    });
-    
-    // File upload area click event
-    document.getElementById('uploadArea').addEventListener('click', function() {
-        document.getElementById('fileInput').click();
-    });
-    
-    // File selection event
-    document.getElementById('fileInput').addEventListener('change', function(e) {
-        const file = e.target.files[0];
-        if (file) {
-            document.querySelector('.upload-area p').textContent = `Selected: ${file.name}`;
-            document.querySelector('.upload-area i').className = 'fas fa-file-alt fa-3x';
-            document.querySelector('.upload-area').style.borderColor = '#00b09b';
-        }
-    });
-    
-    // Drag and drop functionality
-    const uploadArea = document.getElementById('uploadArea');
-    uploadArea.addEventListener('dragover', function(e) {
-        e.preventDefault();
-        this.style.borderColor = '#00b09b';
-        this.style.background = '#e8f5e9';
-    });
-    
-    uploadArea.addEventListener('dragleave', function() {
-        this.style.borderColor = '#667eea';
-        this.style.background = '#f8f9ff';
-    });
-    
-    uploadArea.addEventListener('drop', function(e) {
-        e.preventDefault();
-        this.style.borderColor = '#667eea';
-        this.style.background = '#f8f9ff';
-        
-        const files = e.dataTransfer.files;
-        if (files.length > 0) {
-            document.getElementById('fileInput').files = files;
-            document.querySelector('.upload-area p').textContent = `Selected: ${files[0].name}`;
-            document.querySelector('.upload-area i').className = 'fas fa-file-alt fa-3x';
-        }
-    });
-    
-    // Initialize history and statistics
+// ========== Initialization ==========
+window.addEventListener('load', () => {
     updateHistoryTable();
     updateStatistics();
     
-    // API key check
-    if (CONFIG.GEMINI_API_KEY === "YOUR_API_KEY_HERE") {
-        console.warn('⚠️ Please set a valid Gemini API key in script.js');
+    // Drag & drop upload
+    const uploadArea = document.getElementById('uploadArea');
+    const fileInput = document.getElementById('fileInput');
+    
+    if (uploadArea && fileInput) {
+        uploadArea.addEventListener('click', () => fileInput.click());
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('drag-over');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('drag-over');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('drag-over');
+            if (e.dataTransfer.files.length > 0) {
+                fileInput.files = e.dataTransfer.files;
+            }
+        });
     }
 });
 
-// Make functions available in HTML
+// ========== Expose functions to HTML ==========
 window.processFile = processFile;
+window.scanDriveFolder = scanDriveFolder;
+window.gradeDriveFile = gradeDriveFile;
 window.updateRubric = updateRubric;
 window.generatePDF = generatePDF;
 window.resetAssessment = resetAssessment;
+window.clearHistory = clearHistory;
+window.exportHistory = exportHistory;
+window.viewHistoryDetail = viewHistoryDetail;
+window.deleteHistoryItem = deleteHistoryItem;
+
+// 给“Save to History”按钮用（如果有）
 window.saveToHistory = function() {
     const studentId = document.getElementById('studentId').textContent;
     const studentName = document.getElementById('studentName').textContent;
-    
-    if (studentId === '-') {
-        alert('Please perform grading first');
-        return;
-    }
-    
     const scores = {
         logic: parseInt(document.getElementById('logicScore').textContent),
         flowchart: parseInt(document.getElementById('flowchartScore').textContent),
@@ -610,7 +878,3 @@ window.saveToHistory = function() {
     saveAssessmentToHistory(studentId, studentName, { scores, total, feedback }, fileName);
     alert('Saved to history');
 };
-window.clearHistory = clearHistory;
-window.exportHistory = exportHistory;
-window.viewHistoryDetail = viewHistoryDetail;
-window.deleteHistoryItem = deleteHistoryItem;
